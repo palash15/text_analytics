@@ -1,0 +1,210 @@
+---
+title: "Construct data for predictive modelling"
+author: "Dennis Fok/Bas Donkers"
+date: "March, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#rm(list=ls()) # clean up what is in memory
+library(dplyr)
+library(ggplot2)
+library(tidytext)
+library(SnowballC)
+library(syuzhet)
+library(tidyr)
+library(qdap)
+library(tidyverse)
+```
+
+```{r Pre-processing}
+# options(stringsAsFactors = FALSE)
+reviews_df <- read.csv("C:/Users/Palas/Documents/EUR/Text Analytics/Amazon_Apple_Phone.csv")
+
+reviews_df$Rating[reviews_df$Rating == '5'] <- '0'
+reviews_df$Rating[reviews_df$Rating == '4'] <- '0'
+reviews_df$Rating[reviews_df$Rating == '3'] <- '1'
+reviews_df$Rating[reviews_df$Rating == '2'] <- '1'
+reviews_df$Rating[reviews_df$Rating == '1'] <- '1'
+
+names(reviews_df)[4] <- "reviewtext"
+names(reviews_df)[3] <- "rating"
+
+reviews_df$reviewtext <- as.character(reviews_df$reviewtext)  %>%
+                 tolower() %>%
+                 {mgsub(emoticon[,2],emoticon[,1],.)} %>%
+                 {gsub("\\n", " ", .)} %>%                        # Remove \n (newline)     
+                 {gsub("[?!]+",".",.)} %>%                        # Remove ? and ! (replace by single .)
+                 {gsub("[\\[\\*\\]]*"," ",.)} %>%                 # Remove [ and ] * (replace by single space)
+                 {gsub("(\"| |\\$)-+\\.-+"," number ", .)} %>%    # Find numbers
+                 {gsub("(-+:)*-+ *am"," timeam", .)} %>%          # Find time AM
+                 {gsub("(-+:)*-+ *pm"," timepm", .)} %>%          # Find time PM
+                 {gsub("-+:-+","time", .)} %>%                    # Find general time
+                 {gsub("( |\\$)--+"," number ", .)} %>%           # Find remaining numbers
+                 {gsub("ðÿ?"," ", .)} %>%
+                 {gsub("[Aa]pple?"," ", .)} %>%
+                 {gsub("[Ii]phone?"," ", .)} %>%
+                 {gsub("[Pp]hone?"," ", .)} %>%
+                 {gsub("-"," ", .)} %>%                           # Remove all -
+                 {gsub("\"+"," ", .)} %>%                         # Remove all "
+                 {gsub(";+"," ", .)} %>%                          # Remove excess ;
+                 {gsub("\\.+","\\. ", .)} %>%                     # Remove excess .
+                 {gsub(" +"," ", .)} %>%                          # Remove excess spaces
+                 {gsub("\\. \\.","\\. ", .)}                      # Remove space between periods
+
+
+print("number of reviews")
+nrow(reviews_df) 
+
+#reviews_df<- reviews_df[1:500,]
+#reviews_df_backup <- reviews_df
+```
+
+Remove stop words (with/without "no", "not", "never") and stem
+```{r Filter} 
+ignorelist = stop_words %>% filter(!word %in% c("no", "not", "never"))
+
+for (j in 1:nrow(reviews_df)) {
+  
+  words <- reviews_df[j,] %>% 
+           unnest_tokens(word, reviewtext) %>% 
+           anti_join(ignorelist, by="word")
+  
+  stemmed <- wordStem(words[ , "word"], language = "porter")
+  reviews_df[j, "stemmed_reviewtext_with_no"] <- paste(stemmed, collapse = " ")
+  
+  # Again, but with ignoring all stopwords
+  nostopwords <- reviews_df[j,] %>% unnest_tokens(word, reviewtext) %>%
+                  anti_join( stop_words, by = "word")
+  stemmed <- wordStem(nostopwords[ , "word"], language = "porter")
+  
+  # Add variables to data
+  reviews_df[j, "stemmed_reviewtext"] <- paste(stemmed, collapse = " ")
+  reviews_df[j, "reviewtext"] <- paste((nostopwords$word), collapse = " ")
+  reviews_df[j, "Nr_of_words"]<- nrow(nostopwords)
+}
+print("done")
+```
+
+```{r construct bi-grams from stemmed text, no stop words, but including no}
+all_bigrams <- reviews_df[,c("X", "stemmed_reviewtext_with_no")] %>% 
+               unnest_tokens(bigram, stemmed_reviewtext_with_no, token = "ngrams", n = 2 )
+#This ignores sentences within a review.. could be improved.
+
+head(all_bigrams)
+all_bigrams <- all_bigrams %>%  dplyr::count(bigram, sort = TRUE)
+all_bigrams
+
+sel_bigrams <- all_bigrams %>% filter(n>500)
+sel_bigrams
+```
+
+```{r analyze bigrams}
+bigrams_sep <-  separate(all_bigrams, bigram, c("word1", "word2"), sep = " ")
+bigrams_sep
+
+# Look at bigrams where first word = ...
+bigrams_sep %>%  filter(word1 == "no")
+bigrams_sep %>%  filter(word1 == "never")
+bigrams_sep %>%  filter(word1 == "not")
+```
+
+Remove infrequent and very frequent words from review text
+```{r}
+# Get word frequency after stemming
+frequency  <- reviews_df %>% unnest_tokens(word, stemmed_reviewtext) %>% dplyr::count(word, sort=TRUE)
+
+# Select very frequent or infrequent words
+infrequent <- frequency %>% filter(n < 0.01*nrow(reviews_df))
+frequent   <- frequency %>% filter(word %in% c("phone", "iphon")) # you can extend this list with word you want to remove
+toremove   <- full_join(frequent, infrequent, by = "word")      # combining these word lists
+frequency
+toremove
+```
+
+```{r}
+# Remove common words from stemmed reviewtext
+for (j in 1:nrow(reviews_df)) 
+{
+  tmp <-  anti_join( (reviews_df[j,] %>% unnest_tokens(word, stemmed_reviewtext) ), toremove, by = "word") 
+ 
+  reviews_df[j,"stemmed_reviewtext"] <- paste(tmp[, "word"], collapse = " ")
+}
+
+head(reviews_df)
+save(reviews_df, file="Saved_reviews_df.Rda")
+```
+
+Get document term matrix uni-grams
+```{r}
+reviews_df$X <- as.character(reviews_df$X) %>% as.factor() # the factor may have more values than are actually present. These are removed here, as this causes an error in prcomp
+
+review_dtm <- reviews_df %>% 
+              unnest_tokens(word, stemmed_reviewtext) %>% 
+              dplyr::count(X, word, sort=TRUE) %>% 
+              ungroup() %>%
+              cast_dtm(X,word,n)
+```
+
+Get document term matrix for bi-grams
+```{r}
+review_dtm_bi <- reviews_df %>% 
+              unnest_tokens(bigram, stemmed_reviewtext_with_no, token = "ngrams", n = 2) %>% 
+              filter(bigram %in% sel_bigrams$bigram) %>%
+              dplyr::count(X, bigram, sort=TRUE)
+review_dtm_bi$X = as.character(review_dtm_bi$X)
+
+review_dtm_bi <- review_dtm_bi %>% 
+              ungroup() %>%
+              cast_dtm(X, bigram, n)
+```
+
+```{r Run PCA on DTM}
+N_factors   <- 20
+pca_results <- prcomp(review_dtm, scale = FALSE, rank. = N_factors)  #get the 20 most important factors
+rawLoadings <- pca_results$rotation[, 1:N_factors] %*% diag(pca_results$sdev, N_factors, N_factors)
+rotated     <- varimax(rawLoadings)
+
+pca_results$rotation <- rotated$loadings
+pca_results$x <- scale(pca_results$x[,1:N_factors]) %*% rotated$rotmat 
+
+# Add the factors to the data frame
+lastcol    <- ncol(reviews_df)
+reviews_df <- data.frame(reviews_df, factor = pca_results$x)
+colnames(reviews_df)[(lastcol+1):(lastcol+N_factors)] <- paste0("factor", 1:N_factors)
+
+# Figure out which words load high on each factor
+factor_labels <- NULL 
+for (j in 1:N_factors) {
+  aa<-abs(pca_results$rotation[,j]) %>% sort(decreasing = TRUE) 
+  factor_labels <- rbind(factor_labels, paste0(names(aa[1:8])))
+}
+factor_labels
+```
+
+```{r Add indicators for 50 most common words}
+counts <- colSums(as.matrix(review_dtm)) %>% sort(decreasing=TRUE)
+
+lastcol        <- ncol(reviews_df)
+N_words_stored <- 50
+word_labels    <- (names(counts)[1:N_words_stored])
+reviews_df     <- data.frame(reviews_df, words = as.matrix(review_dtm[,word_labels]))
+names(reviews_df)[(lastcol+1):(lastcol+N_words_stored)] <- word_labels
+```
+
+```{r Add inferred emotions}
+nrc_emotions  <- get_nrc_sentiment(reviews_df$reviewtext)
+
+lastcol <- ncol(reviews_df)
+reviews_df <- data.frame(reviews_df, nrc_emotions)
+```
+
+```{r Add bigrams}
+review_dtm_bi <- as.matrix(review_dtm_bi)
+reviews_df <- cbind(reviews_df, review_dtm_bi[match(rownames(reviews_df), rownames(review_dtm_bi)),])
+reviews_df[is.na(reviews_df)] <- 0
+```
+
+```{r save data}
+save(reviews_df , file="reviews_with_predictor_variables.rData")
+```

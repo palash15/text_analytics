@@ -1,0 +1,727 @@
+---
+title: "RCode for Assignment 2"
+author: "Luna/Saxena/Stechert"
+date: "April, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(text2vec)
+library(tidytext)
+library(ggplot2)
+library(SnowballC)
+```
+
+Obtaining and organizing the data
+```{r}
+options(stringsAsFactors = FALSE)
+reviews_df <- read.csv("~/Downloads/Amazon_Apple_Phone.csv")  
+names(reviews_df)[names(reviews_df) == "Reviews"] <- "Description"
+
+reviews_df$Description <- as.character(reviews_df$Description) %>%
+                            tolower() %>%
+                            {gsub(":( |-|o)*\\("," SADSMILE ", .)} %>%       # Find :( or :-( or : ( or :o(
+                            {gsub(":( |-|o)*\\)"," HAPPYSMILE ", .)} %>%     # Find :) or :-) or : ) or :o)
+                            {gsub("(\"| |\\$)-+\\.-+"," NUMBER", .)} %>%     # Find numbers
+                            {gsub("(-+:)*-+ *am"," TIME_AM", .)} %>%         # Find time AM
+                            {gsub("(-+:)*-+ *pm"," TIME_PM", .)} %>%         # Find time PM
+                            {gsub("-+:-+","TIME", .)} %>%                    # Find general time
+                            {gsub("( |\\$)--+"," NUMBER", .)} %>%            # Find remaining numbers
+#                            {gsub("-"," ", .)} %>%                           # Remove all -
+#                            {gsub("\"+"," ", .)} %>%                         # Remove all "
+#                            {gsub(";+"," ", .)} %>%                          # Remove excess ;
+#                            {gsub("\\.+","\\.", .)} %>%                      # Remove excess .
+                            {gsub("[[:punct:]]", " ",.)} %>% 
+                            {gsub(" +"," ", .)}                         # Remove excess spaces
+#                            {gsub(" ate"," eat", .)} %>%        # stem specific word
+                       
+ 
+saved <- reviews_df
+```
+
+Word stemming
+```{r stem words} 
+# here removing stop words, and stemming done
+for (j in 1:nrow(reviews_df)) {
+ tmp <- reviews_df[j,] %>% unnest_tokens(word, Description) %>% anti_join(stop_words, 
+                                                                          by="word")
+  stemmed <- wordStem(tmp[ , "word"], language = "porter")
+  reviews_df[j, "stemmed_reviewtext"] <- paste(stemmed, collapse = " ")
+
+}
+#reviews_df$stemmed_reviewtext <- reviews_df$Description
+```
+
+Pre-process and get TCM
+```{r}
+# create iterator over list of text items
+it = itoken(reviews_df$stemmed_reviewtext)
+```
+
+```{r}
+#create the vocabulary and remove infrequent words
+vocabulary = create_vocabulary(it)
+vocabulary = prune_vocabulary(vocabulary, term_count_min = 400)
+
+#create vector version of the vocabulary: speeds up allocation/search process
+v_vect = vocab_vectorizer(vocabulary)
+tcm = create_tcm(it, v_vect, skip_grams_window = 8L) # create term co-occurrence matrix
+```
+
+Create a model with a set of model configuration parameters.
+```{r}
+glove_model = GlobalVectors$new( x_max = 1000 , rank = 50)
+```
+
+# fit model and obtain results.
+```{r}
+word_vectors = glove_model$fit_transform(tcm, n_iter = 200)
+```
+
+```{r}
+word_vectors[1:10,1:10]
+```
+
+
+```{r}
+similarity_matrix = sim2(word_vectors)
+print("a sample of the similarity matrix across words ")
+similarity_matrix[1:9,1:9]
+nwords=nrow(similarity_matrix)
+```
+
+```{r}
+top_bottom=c(1:10,(nwords-9):nwords)
+```
+
+
+```{r}
+cc=sort(similarity_matrix[,"fix"], decreasing=TRUE)
+cc[top_bottom]
+```
+
+```{r}
+cc=sort(similarity_matrix[,"phone"], decreasing=TRUE)
+cc[top_bottom]
+```
+
+```{r}
+cc=sort(similarity_matrix[,"featur"], decreasing=TRUE)
+cc[top_bottom]
+```
+
+
+```{r}
+
+cc=sort(similarity_matrix[,"state"], decreasing=TRUE)
+head(cc,10); tail (cc,10)
+```
+```{r}
+cc=sort(similarity_matrix[,"love"], decreasing=TRUE)
+head(cc,10); tail (cc,10)
+```
+```{r}
+cc=sort(similarity_matrix[,"verizon"], decreasing=TRUE)
+head(cc,10); tail (cc,10)
+```
+
+```{r}
+comparator = word_vectors["love",]+word_vectors["verizon",]
+similarities = sim2(word_vectors,t(comparator))
+ranking = sim2(word_vectors,t(comparator))%>% order(decreasing=TRUE)
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+```
+```{r}
+comparator = word_vectors["deliveri",]
+ranking = sim2(word_vectors,t(comparator))%>% order(decreasing=TRUE)
+print(vocabulary$term[ranking[top_bottom]])
+
+```
+
+
+```{r}
+comparator = word_vectors["phone",]+word_vectors["deliveri",]
+similarities = sim2(word_vectors,t(comparator))
+ranking = similarities %>% order(decreasing=TRUE)
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+```
+
+```{r}
+comparator = word_vectors["love",]-word_vectors["batteri",]+word_vectors["screen",]  
+similarities = sim2(word_vectors,t(comparator))
+ranking = similarities %>% order(decreasing=TRUE)
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+```
+
+
+```{r}
+comparator = word_vectors["screen",]
+ranking = sim2(word_vectors,t(comparator))%>% order(decreasing=TRUE)
+print(vocabulary$term[ranking[top_bottom]])
+```
+```{r}
+comparator = word_vectors["charger",]
+ranking = sim2(word_vectors,t(comparator))%>% order(decreasing=TRUE)
+print(vocabulary$term[ranking[top_bottom]])
+
+```
+
+```{r}
+comparator = word_vectors["perfect",]+word_vectors["phone",]
+ranking = sim2(word_vectors,t(comparator))%>% order(decreasing=TRUE)
+print(vocabulary$term[ranking[top_bottom]])
+```
+
+
+```{r}
+
+comparator = word_vectors["samsung",]-word_vectors["love",]+word_vectors["phone",]
+ranking = sim2(word_vectors,t(comparator))%>% order(decreasing=TRUE)
+print(vocabulary$term[ranking[top_bottom]])
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+```
+
+```{r}
+
+comparator = word_vectors["product",]-word_vectors["samsung",]+word_vectors["appl",]
+similarities = sim2(word_vectors,t(comparator))
+ranking = similarities %>% order(decreasing=TRUE)
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+```
+
+
+
+```{r}
+comparator = word_vectors["appl",] 
+similarities = sim2(word_vectors,t(comparator))
+ranking = similarities %>% order(decreasing=TRUE)
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+
+feature_vec=c("love","condit","batteri","price","fast","screen","charger","seller")
+similarities[feature_vec,]
+```
+```{r}
+comparator = word_vectors["samsung",]
+similarities = sim2(word_vectors,t(comparator))
+ranking = similarities %>% order(decreasing=TRUE)
+print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+
+feature_vec=c("love","condit","batteri","price","fast","screen","charger","seller")
+similarities[feature_vec,]
+```
+
+```{r}
+comparator = word_vectors["appl",]  - word_vectors["samsung",]
+similarities = sim2(word_vectors,t(comparator))
+# ranking = similarities %>% order(decreasing=TRUE)
+# print(as.data.frame(similarities[ranking[top_bottom]], row.names = vocabulary$term[ranking[top_bottom]]))
+feature_vec=c("love","condit","batteri","price","fast","screen","charger","seller")
+print(as.data.frame(similarities[feature_vec,] ))
+```
+---
+
+Construct data for predictive modelling
+
+```{r setup, include=FALSE}
+#rm(list=ls()) # clean up what is in memory
+library(dplyr)
+library(ggplot2)
+library(tidytext)
+library(SnowballC)
+library(syuzhet)
+library(tidyr)
+library(qdap)
+library(tidyverse)
+```
+
+```{r Pre-processing}
+# options(stringsAsFactors = FALSE)
+reviews_df <- read.csv("C:/Users/Palas/Documents/EUR/Text Analytics/Amazon_Apple_Phone.csv")
+reviews_df$Rating[reviews_df$Rating == '5'] <- '0'
+reviews_df$Rating[reviews_df$Rating == '4'] <- '0'
+reviews_df$Rating[reviews_df$Rating == '3'] <- '1'
+reviews_df$Rating[reviews_df$Rating == '2'] <- '1'
+reviews_df$Rating[reviews_df$Rating == '1'] <- '1'
+names(reviews_df)[4] <- "reviewtext"
+names(reviews_df)[3] <- "rating"
+reviews_df$reviewtext <- as.character(reviews_df$reviewtext)  %>%
+                 tolower() %>%
+                 {mgsub(emoticon[,2],emoticon[,1],.)} %>%
+                 {gsub("\\n", " ", .)} %>%                        # Remove \n (newline)     
+                 {gsub("[?!]+",".",.)} %>%                        # Remove ? and ! (replace by single .)
+                 {gsub("[\\[\\*\\]]*"," ",.)} %>%                 # Remove [ and ] * (replace by single space)
+                 {gsub("(\"| |\\$)-+\\.-+"," number ", .)} %>%    # Find numbers
+                 {gsub("(-+:)*-+ *am"," timeam", .)} %>%          # Find time AM
+                 {gsub("(-+:)*-+ *pm"," timepm", .)} %>%          # Find time PM
+                 {gsub("-+:-+","time", .)} %>%                    # Find general time
+                 {gsub("( |\\$)--+"," number ", .)} %>%           # Find remaining numbers
+                 {gsub("ðÿ?"," ", .)} %>%
+                 {gsub("[Aa]pple?"," ", .)} %>%
+                 {gsub("[Ii]phone?"," ", .)} %>%
+                 {gsub("[Pp]hone?"," ", .)} %>%
+                 {gsub("-"," ", .)} %>%                           # Remove all -
+                 {gsub("\"+"," ", .)} %>%                         # Remove all "
+                 {gsub(";+"," ", .)} %>%                          # Remove excess ;
+                 {gsub("\\.+","\\. ", .)} %>%                     # Remove excess .
+                 {gsub(" +"," ", .)} %>%                          # Remove excess spaces
+                 {gsub("\\. \\.","\\. ", .)}                      # Remove space between periods
+print("number of reviews")
+nrow(reviews_df) 
+#reviews_df<- reviews_df[1:500,]
+#reviews_df_backup <- reviews_df
+```
+
+Remove stop words (with/without "no", "not", "never") and stem
+```{r Filter} 
+ignorelist = stop_words %>% filter(!word %in% c("no", "not", "never"))
+for (j in 1:nrow(reviews_df)) {
+  
+  words <- reviews_df[j,] %>% 
+           unnest_tokens(word, reviewtext) %>% 
+           anti_join(ignorelist, by="word")
+  
+  stemmed <- wordStem(words[ , "word"], language = "porter")
+  reviews_df[j, "stemmed_reviewtext_with_no"] <- paste(stemmed, collapse = " ")
+  
+  # Again, but with ignoring all stopwords
+  nostopwords <- reviews_df[j,] %>% unnest_tokens(word, reviewtext) %>%
+                  anti_join( stop_words, by = "word")
+  stemmed <- wordStem(nostopwords[ , "word"], language = "porter")
+  
+  # Add variables to data
+  reviews_df[j, "stemmed_reviewtext"] <- paste(stemmed, collapse = " ")
+  reviews_df[j, "reviewtext"] <- paste((nostopwords$word), collapse = " ")
+  reviews_df[j, "Nr_of_words"]<- nrow(nostopwords)
+}
+print("done")
+```
+
+```{r construct bi-grams from stemmed text, no stop words, but including no}
+all_bigrams <- reviews_df[,c("X", "stemmed_reviewtext_with_no")] %>% 
+               unnest_tokens(bigram, stemmed_reviewtext_with_no, token = "ngrams", n = 2 )
+#This ignores sentences within a review.. could be improved.
+head(all_bigrams)
+all_bigrams <- all_bigrams %>%  dplyr::count(bigram, sort = TRUE)
+all_bigrams
+sel_bigrams <- all_bigrams %>% filter(n>500)
+sel_bigrams
+```
+
+```{r analyze bigrams}
+bigrams_sep <-  separate(all_bigrams, bigram, c("word1", "word2"), sep = " ")
+bigrams_sep
+# Look at bigrams where first word = ...
+bigrams_sep %>%  filter(word1 == "no")
+bigrams_sep %>%  filter(word1 == "never")
+bigrams_sep %>%  filter(word1 == "not")
+```
+
+Remove infrequent and very frequent words from review text
+```{r}
+# Get word frequency after stemming
+frequency  <- reviews_df %>% unnest_tokens(word, stemmed_reviewtext) %>% dplyr::count(word, sort=TRUE)
+# Select very frequent or infrequent words
+infrequent <- frequency %>% filter(n < 0.01*nrow(reviews_df))
+frequent   <- frequency %>% filter(word %in% c("phone", "iphon")) # you can extend this list with word you want to remove
+toremove   <- full_join(frequent, infrequent, by = "word")      # combining these word lists
+frequency
+toremove
+```
+
+```{r}
+# Remove common words from stemmed reviewtext
+for (j in 1:nrow(reviews_df)) 
+{
+  tmp <-  anti_join( (reviews_df[j,] %>% unnest_tokens(word, stemmed_reviewtext) ), toremove, by = "word") 
+ 
+  reviews_df[j,"stemmed_reviewtext"] <- paste(tmp[, "word"], collapse = " ")
+}
+head(reviews_df)
+save(reviews_df, file="Saved_reviews_df.Rda")
+```
+
+Get document term matrix uni-grams
+```{r}
+reviews_df$X <- as.character(reviews_df$X) %>% as.factor() # the factor may have more values than are actually present. These are removed here, as this causes an error in prcomp
+review_dtm <- reviews_df %>% 
+              unnest_tokens(word, stemmed_reviewtext) %>% 
+              dplyr::count(X, word, sort=TRUE) %>% 
+              ungroup() %>%
+              cast_dtm(X,word,n)
+```
+
+Get document term matrix for bi-grams
+```{r}
+review_dtm_bi <- reviews_df %>% 
+              unnest_tokens(bigram, stemmed_reviewtext_with_no, token = "ngrams", n = 2) %>% 
+              filter(bigram %in% sel_bigrams$bigram) %>%
+              dplyr::count(X, bigram, sort=TRUE)
+review_dtm_bi$X = as.character(review_dtm_bi$X)
+review_dtm_bi <- review_dtm_bi %>% 
+              ungroup() %>%
+              cast_dtm(X, bigram, n)
+```
+
+```{r Run PCA on DTM}
+N_factors   <- 20
+pca_results <- prcomp(review_dtm, scale = FALSE, rank. = N_factors)  #get the 20 most important factors
+rawLoadings <- pca_results$rotation[, 1:N_factors] %*% diag(pca_results$sdev, N_factors, N_factors)
+rotated     <- varimax(rawLoadings)
+pca_results$rotation <- rotated$loadings
+pca_results$x <- scale(pca_results$x[,1:N_factors]) %*% rotated$rotmat 
+# Add the factors to the data frame
+lastcol    <- ncol(reviews_df)
+reviews_df <- data.frame(reviews_df, factor = pca_results$x)
+colnames(reviews_df)[(lastcol+1):(lastcol+N_factors)] <- paste0("factor", 1:N_factors)
+# Figure out which words load high on each factor
+factor_labels <- NULL 
+for (j in 1:N_factors) {
+  aa<-abs(pca_results$rotation[,j]) %>% sort(decreasing = TRUE) 
+  factor_labels <- rbind(factor_labels, paste0(names(aa[1:8])))
+}
+factor_labels
+```
+
+```{r Add indicators for 50 most common words}
+counts <- colSums(as.matrix(review_dtm)) %>% sort(decreasing=TRUE)
+lastcol        <- ncol(reviews_df)
+N_words_stored <- 50
+word_labels    <- (names(counts)[1:N_words_stored])
+reviews_df     <- data.frame(reviews_df, words = as.matrix(review_dtm[,word_labels]))
+names(reviews_df)[(lastcol+1):(lastcol+N_words_stored)] <- word_labels
+```
+
+```{r Add inferred emotions}
+nrc_emotions  <- get_nrc_sentiment(reviews_df$reviewtext)
+lastcol <- ncol(reviews_df)
+reviews_df <- data.frame(reviews_df, nrc_emotions)
+```
+
+```{r Add bigrams}
+review_dtm_bi <- as.matrix(review_dtm_bi)
+reviews_df <- cbind(reviews_df, review_dtm_bi[match(rownames(reviews_df), rownames(review_dtm_bi)),])
+reviews_df[is.na(reviews_df)] <- 0
+```
+
+```{r save data}
+save(reviews_df , file="reviews_with_predictor_variables.rData")
+```
+
+oad the data
+```{r}
+load("C:/Users/Palas/Documents/EUR/Text Analytics/reviews_with_predictor_variables.rData")
+colnames(reviews_df) <- gsub(" ", "_", colnames(reviews_df))  # replace spaces in variable names
+reviews_df <- reviews_df[, -96]     # drop NA column
+reviews_df$rating <- as.numeric(reviews_df$rating)            # 0=happy, 1=not happy
+N_factors <- 20
+N_emotions <- 10 # includes pos/neg
+N_words_stored <- 50
+N_bigrams_stored <- 11
+```
+
+Get feature names and split sample
+```{r Split sample}
+index <- 8
+factornames  <- colnames(reviews_df)[index:(index+N_factors-1)]
+index <- index + N_factors
+wordnames    <- colnames(reviews_df)[index:(index+N_words_stored-1)]
+index <- index + N_words_stored
+emotionnames <- colnames(reviews_df)[index:(index+N_emotions-1)]
+index <- index + N_emotions
+bigramnames <- colnames(reviews_df)[index:(index+N_bigrams_stored-1)]
+index <- index + N_bigrams_stored
+set.seed(1234)    # fix seed to allow for results to be reproducible
+estimation_sample <- sort(sample(1:nrow(reviews_df), size = round(0.7*nrow(reviews_df))))
+test_sample <- (1:nrow(reviews_df))[-estimation_sample]
+```
+
+Prepare some strings for use in models
+```{r }
+allFactors <- paste("(", paste(factornames,collapse=" + "), ")")
+allEmotions <- paste("(", paste(emotionnames,collapse=" + "), ")")
+allWords <- paste("(", paste(wordnames,collapse=" + "), ")")
+allBigrams <- paste("(", paste(bigramnames,collapse=" + "), ")")
+allWordsAndBigrams <- paste("(", paste(c(wordnames, bigramnames),collapse=" + "), ")")
+# show example
+allFactors
+allEmotions
+allWords
+allBigrams
+```
+
+# Basic linear model (without interactions and variable selection)
+```{r Linear Models}
+f <- paste("rating ~ Nr_of_words + ", allFactors, " + ", allEmotions, " + ", allWords , " + ", allBigrams)
+lm.all <- lm(f, data=reviews_df[estimation_sample,] )
+summary(lm.all)
+f <- paste("rating ~ Nr_of_words + ", allFactors, " + ", allWords , " + ", allBigrams)
+lm.nodict <- lm(f, data=reviews_df[estimation_sample,] )
+summary(lm.nodict)
+f <- paste("rating ~  Nr_of_words + ", allFactors)
+lm.onlyfactors <- lm(f, data = reviews_df[estimation_sample, ])
+summary(lm.onlyfactors)
+f <- paste("rating ~  Nr_of_words + ", allEmotions)
+lm.onlyemotions <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.onlyemotions)
+ 
+f <- paste("rating ~ Nr_of_words + ", allWords)
+lm.onlywords <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.onlywords)
+f <- paste("rating ~ Nr_of_words + ", allBigrams)
+lm.bigrams <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.bigrams)
+f <- paste("rating ~ Nr_of_words + ", allWords , " + ",allBigrams)
+lm.words_bigrams <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.words_bigrams)
+f <- paste("rating ~ Nr_of_words + positive + negative")
+lm.posneg <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.posneg)
+```
+```{r AIC comparison}
+AIC(lm.all, lm.nodict, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.bigrams, lm.words_bigrams, lm.posneg)
+```
+Best model is lowest AIC is model with all!
+
+
+```{r test nested}
+anova(lm.nodict, lm.all)
+anova(lm.posneg, lm.onlyemotions)
+anova(lm.words_bigrams, lm.all)
+```
+
+```{r Plot prediction histograms}
+library(ggplot2)
+dat <- data.frame(Prediction=predict(lm.all), rating=reviews_df[estimation_sample, "rating"])
+ggplot(dat, aes(x=Prediction))  + 
+    geom_histogram(data=subset(dat,rating == 0),fill = "red", alpha = 0.2) +
+    geom_histogram(data=subset(dat,rating == 1),fill = "blue", alpha = 0.2)
+```
+Compare to logit model (GLM)
+```{r glm}
+f <- paste("(rating==1) ~ Nr_of_words + ", allFactors, " + ", allEmotions, " + ", allWords , " + ", allBigrams)
+glm.all <- glm(f, data=reviews_df[estimation_sample,] , family=binomial)
+summary(glm.all)
+```
+
+
+Plot GLM fit
+```{r glm fit}
+hist(predict(glm.all, type="response"))
+dat <- data.frame(Predicted_prob=predict(glm.all, type="response"), rating=reviews_df[estimation_sample, "rating"])
+ggplot(dat, aes(x=Predicted_prob))  + 
+    geom_histogram(data=subset(dat,rating == 0),fill = "red", alpha = 0.2) +
+    geom_histogram(data=subset(dat,rating == 1),fill = "blue", alpha = 0.2)
+```
+
+
+Compare fit: hitrate
+```{r}
+library(caret)
+predglm <- as.factor(predict(glm.all, type="response") > .5)
+predlm  <- as.factor(predict(lm.all, type="response") > .5)
+confusionMatrix(data = predlm,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]==1))
+confusionMatrix(data = predglm,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]==1))
+```
+```{r all word interactions}
+f <- paste("rating ~  ", allWords,"^2 +", allBigrams)
+lm.interactionswords <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.interactionswords)
+```
+
+```{r interactions vs. bigrams}
+AIC(lm.words_bigrams, lm.interactionswords)
+anova(lm.interactionswords, lm.words_bigrams)
+```
+
+```{r Variable importance}
+# on t-values
+vi <- varImp(lm.all)
+vi$Variable <- rownames(vi)
+vi <- vi[order(-vi$Overall),]
+vi$Variable <- factor(vi$Variable, levels = rev(vi$Variable))
+ggplot(vi[1:25, ], aes(Variable,Overall)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (t-value based)")
+ggplot(vi[(nrow(vi)-24):nrow(vi), ], aes(Variable,Overall)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (t-value based)")
+```
+
+```{r}
+# on standardized coefficients
+library("matrixStats")
+vi <- coef(lm.all)/sqrt(colVars(model.matrix(formula(lm.all), data=reviews_df[estimation_sample,])))
+StdCoef <- data.frame(StdCoef=vi[2:length(vi)])
+StdCoef$Variable <- rownames(StdCoef)
+StdCoef <- StdCoef[order(- StdCoef$StdCoef),]
+StdCoef$Variable <- factor( StdCoef$Variable, levels = rev( StdCoef$Variable))
+StdCoef <-  StdCoef[1:25,]
+ggplot( StdCoef, aes(Variable,StdCoef)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (standardized coefficients)")
+```
+```{r}
+# on coef/ (max-min)
+library("matrixStats")
+X <- model.matrix(formula(lm.all), data=reviews_df[estimation_sample,])
+vi <- coef(lm.all)/( apply(X, 2, max) - apply(X, 2, min) )
+StdCoef <- data.frame(StdCoef=vi[2:length(vi)])
+StdCoef$Variable <- rownames(StdCoef)
+StdCoef <- StdCoef[order(- StdCoef$StdCoef),]
+StdCoef$Variable <- factor( StdCoef$Variable, levels = rev( StdCoef$Variable))
+StdCoef <-  StdCoef[1:25,]
+ggplot( StdCoef, aes(Variable,StdCoef)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (coefficients/range)")
+```
+
+Forward/backward selection is slow... do not do on large model
+```{r}
+f <- paste("rating ~  Nr_of_words + ", allFactors, " + ", allEmotions)
+lm.fe_step <- step(lm(f, data = reviews_df[estimation_sample,]), direction = "both")
+summary(lm.fe_step)
+```
+
+# Lasso regression
+```{r Lasso}
+library(glmnet)
+library(plotmo) # for plot_glmnet
+```
+```{r}
+f = paste("~ 0 + Nr_of_words + ", allFactors, " * ", allEmotions, " + ", allWords, " + ", allBigrams)
+# Collect explanatory variables in a (large) matrix
+LargeX <- model.matrix(formula(f), data=reviews_df)
+y <- as.matrix(reviews_df[estimation_sample, "rating"])
+lasso.mod <- glmnet(LargeX[estimation_sample,], y, alpha = 1)
+plot_glmnet(lasso.mod) 
+plot(lasso.mod)
+cvfit <- cv.glmnet(LargeX[estimation_sample,], y, alpha = 1)
+plot(cvfit)
+coef(lasso.mod, cvfit$lambda.1se)
+par <- predict(lasso.mod, s = cvfit$lambda.min, type='coefficients')
+nnzero(par)
+par <- predict(lasso.mod, s = cvfit$lambda.1se, type='coefficients')
+nnzero(par)
+lasso.pred <- predict(lasso.mod, s = cvfit$lambda.1se, newx = LargeX[estimation_sample,])
+lasso.pred.test <- predict(lasso.mod, s = cvfit$lambda.1se, newx = LargeX[test_sample,])
+mean((reviews_df[test_sample, "rating"]-lasso.pred.test)^2)
+```
+
+# Lasso logit = much slower...
+```{r}
+f = paste("~ 0 + Nr_of_words + ", allFactors, " * ", allEmotions, " + ", allWords, " + ", allBigrams)
+LargeX <- model.matrix(formula(f), data=reviews_df)
+y <- as.factor(reviews_df[estimation_sample, "rating"])
+lasso.glm <- glmnet(LargeX[estimation_sample,], y, family="binomial", alpha = 1)
+plot_glmnet(lasso.glm, nresponse = 5) 
+plot(lasso.glm)
+cvfit.glm <- cv.glmnet(LargeX[estimation_sample,], (y), family="binomial", alpha = 1)
+plot(cvfit.glm)
+coef(lasso.glm, cvfit.glm$lambda.1se)
+par <- predict(lasso.glm, s = cvfit.glm$lambda.min, type='coefficients')
+nnzero(par)
+length(par)
+lasso.glm.pred <- predict(lasso.glm, s = cvfit.glm$lambda.1se, type="response", newx = LargeX[estimation_sample,])
+lasso.glm.pred.test <- predict(lasso.glm, s = cvfit.glm$lambda.1se,type="response", newx = LargeX[test_sample,])
+```
+
+```{r Linear with Interactions}
+f <- paste("rating ~  Nr_of_words + ", allFactors,"+", allEmotions,"+", allWordsAndBigrams, " + ", allFactors, " *", allEmotions, " + ", allFactors , "* ", allWordsAndBigrams, " + ", allEmotions , " * ", allWordsAndBigrams)
+lm.interactions <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.interactions)
+```
+
+
+```{r}
+AIC(lm.all, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.interactions, lm.fe_step)
+```
+
+Predictive performance
+```{r}
+for (m in list(lm.all, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.interactions, lm.fe_step))
+{
+  predicted <- predict.lm(m, reviews_df[estimation_sample,])
+  mse <- mean((as.numeric(reviews_df[estimation_sample,"rating"])-predicted)^2)
+  
+  predicted_test <- predict.lm(m, reviews_df[test_sample,])
+  mse_test<- mean((as.numeric(reviews_df[test_sample,"rating"])-predicted_test)^2)
+  print(c(sqrt(mse), sqrt(mse_test)))
+}
+print("lm.all, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.interactions, lm.fe_step")
+```
+
+# Random forest
+```{r}
+library("randomForest")
+```
+```{r}
+f = paste("as.factor(rating) ~ Nr_of_words + ", allFactors, " * ", allEmotions, " + ", allWords, " + ", allBigrams)
+rf = randomForest(formula(f),  
+                   ntree = 100,
+                   data = reviews_df[estimation_sample,])
+plot(rf)
+print(rf)
+```
+
+```{r}
+varImpPlot(rf,  
+           sort = T,
+           n.var = 20,
+           main = "Top 20 - Variable Importance")
+```
+
+```{r}
+library(caret)
+pred.alt <- predict(rf)
+print("estimation_oob")
+confusionMatrix(data = pred.alt,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]))
+pred.est <- predict(rf, reviews_df[estimation_sample,])
+print("estimation_insample")
+confusionMatrix(data = pred.est,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]))
+pred.test <- predict(rf, reviews_df[test_sample,])
+print("validation")
+confusionMatrix(data = pred.test,  
+                reference = as.factor(reviews_df[test_sample,"rating"]))
+```
+
+```{r forecast comparison}
+for (m in list(lm.all, lm.nodict, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.bigrams, lm.words_bigrams, lm.posneg, lm.interactions, lm.fe_step, lm.interactionswords))
+{
+  predicted <- 1+(predict.lm(m, reviews_df[estimation_sample,]) >= 0.5)
+  predicted_test <- 1+ (predict.lm(m, reviews_df[test_sample,]) >= 0.5)
+  hit <- mean(predicted == reviews_df[estimation_sample,"rating"])
+  hit.test <- mean(predicted_test == reviews_df[test_sample,"rating"])
+  print(c(hit,hit.test))
+}
+print("lm.all, lm.nodict, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.bigrams, lm.words_bigrams, lm.posneg, lm.interactions, lm.fe_step, lm.interactionswords")
+print("GLM")
+pred.glm <- predict(glm.all, type="response") >= 0.5
+pred.glm.test <- predict(glm.all, type="response", newdata=reviews_df[test_sample,]) >= 0.5
+print("estimation_insample")
+mean(pred.glm == (reviews_df[estimation_sample,"rating"]==1))
+print("test")
+mean(pred.glm.test == (reviews_df[test_sample,"rating"]==1))
+print("Lasso LM")
+pred <- 1+(lasso.pred >= 0.5)
+hit <- mean(pred == reviews_df[estimation_sample,"rating"])
+pred_test <- 1+(lasso.pred.test >= 0.5)
+hit.test <- mean(pred_test == reviews_df[test_sample,"rating"])
+print(c(hit,hit.test))
+print("Lasso GLM")
+hit <- mean((lasso.glm.pred>=0.5) == (reviews_df[estimation_sample,"rating"]==1))
+hit.test <- mean((lasso.glm.pred.test>=0.5) == (reviews_df[test_sample,"rating"]==1))
+print(c(hit,hit.test))
+print("RF")
+pred.alt <- predict(rf)
+print("estimation_oob")
+mean(pred.alt == as.factor(reviews_df[estimation_sample,"rating"]))
+pred.est <- predict(rf, reviews_df[estimation_sample,])
+print("estimation_insample")
+mean(pred.est == as.factor(reviews_df[estimation_sample,"rating"]))
+pred.test <- predict(rf, reviews_df[test_sample,])
+print("test")
+mean(pred.test == as.factor(reviews_df[test_sample,"rating"]))
+```
+# END
+
+

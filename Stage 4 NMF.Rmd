@@ -1,0 +1,206 @@
+---
+title: "NMF"
+author: "Vanessa Stechert"
+date: "April, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(NMF)
+library(tidytext)
+library(ggplot2)
+library(tm)
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("Biobase")
+```
+
+Obtaining and organizing the data
+```{r}
+reviews_df <- read.csv("~/Downloads/Amazon_Apple_Phone.csv")
+reviews_df <- reviews_df[-c(2)]
+names(reviews_df)[3] <- "Description"
+View(reviews_df)
+#names(reviews_df)[2] <- "reviewtext"
+#names(reviews_df)[5] <- "rating"
+
+reviews_df$Description <- as.character(reviews_df$Description)  %>%
+                 tolower() %>%
+                # {mgsub(emoticon[,2],emoticon[,1],.)} %>%
+                 {gsub("\\n", " ", .)} %>%                        # Remove \n (newline)     
+                 {gsub("[?!]+",".",.)} %>%                        # Remove ? and ! (replace by single .)
+                 {gsub("[\\[\\*\\]]*"," ",.)} %>%                 # Remove [ and ] * (replace by single space)
+                 {gsub("(\"| |\\$)-+\\.-+"," number ", .)} %>%    # Find numbers
+                 {gsub("(-+:)*-+ *am"," timeam", .)} %>%          # Find time AM
+                 {gsub("(-+:)*-+ *pm"," timepm", .)} %>%          # Find time PM
+                 {gsub("-+:-+","time", .)} %>%                    # Find general time
+                 {gsub("( |\\$)--+"," number ", .)} %>%           # Find remaining numbers
+                 {gsub("-"," ", .)} %>%                           # Remove all -
+                 {gsub("\"+"," ", .)} %>%                         # Remove all "
+                 {gsub(";+"," ", .)} %>%                          # Remove excess ;
+                 {gsub("\\.+","\\. ", .)} %>%                     # Remove excess .
+                 {gsub(" +"," ", .)} %>%                          # Remove excess spaces
+                 {gsub("\\. \\.","\\. ", .)}                      # Remove space between periods
+
+saved <- reviews_df
+reviews_df <- saved[1:1000,]
+print("done")
+```
+
+Pre-process and get DTM
+```{r}
+corpus <- Corpus(VectorSource(unlist(reviews_df[, "Description"])))
+# preprocess and create DTM
+dtm <- DocumentTermMatrix(corpus, control = list(stemming = TRUE, stopwords = TRUE, minWordLength = 3, removeNumbers = TRUE, removePunctuation = TRUE))
+dim(dtm)
+```
+
+Count freq of words
+```{r}
+library(slam)
+summary(col_sums(dtm))
+lowFreq <- (col_sums(dtm)<100)
+sum(lowFreq)
+```
+
+Filter low frequency words (and remove empty docs)
+```{r}
+dtm <- dtm[, !lowFreq]
+dtm <- dtm[row_sums(dtm) > 0,]
+summary(col_sums(dtm))
+n <- nrow(dtm)
+dim(dtm)
+```
+
+```{r}
+#saved_dtm <- dtm
+#dtm <- saved_dtm
+```
+
+Optional: select a number of columns for experimentation purposes
+```{r}
+maxcols <- ncol(dtm)
+dropcols <- (col_sums(dtm[,1:maxcols]) < 1)
+dtm <- dtm[,!dropcols]
+
+droprows <- (row_sums(dtm[,1:maxcols])==0)
+dtm <- dtm[!droprows,]
+dim(dtm)
+```
+
+Create TDM
+```{r}
+V <- t(as.matrix(dtm[,1:maxcols]))  # NMF is usually defined on term-document-matrix
+```
+
+Obtain NMF with different methods
+```{r}
+nfactors <- 2
+nmf_multi <- nmf(V, nfactors, method=list("snmf/l","snmf/r"), seed="nndsvd", .options='vt')
+plot(nmf_multi)
+compare(nmf_multi)
+```
+
+```{r compare fits}
+for (m in nmf_multi)
+{
+  print(mean((V-fitted(m))^2))
+  plot(m)
+} 
+```
+
+Use fast/good method with different ranks
+```{r}
+nmf_rank = list()
+for (n in seq(2,14,2))
+{
+  nmf <- nmf(V, rank=n, method=list("snmf/l"), seed="nndsvd", .options='vt')
+  fit <- fitted(nmf)
+  mean(abs(V-fit))
+  nmf_rank = append(nmf_rank, nmf)
+}
+compare(nmf_rank)
+```
+
+Make plot of fit
+```{r collect res}
+r = c()
+error = c()
+for (m in nmf_rank)
+{
+  r = rbind(r, ncol(m@fit@W))
+  error = rbind(error, mean((V-fitted(m))^2))
+}
+plot(r,error)
+```
+
+Look at SVD to get rank to use
+```{r SVD}
+res <- svd(V)
+plot(res$d[1:40])
+```
+
+Choose fastest method and rank based on SVD
+```{r}
+nfactors <- 10
+res <- nmf(V, rank=nfactors, method="snmf/l", seed="nndsvd", .options='v')
+W <- basis(res)
+H <- coef(res)
+```
+
+Plot some output
+```{r}
+fit <- fitted(res)
+mean((V-fit)^2)
+heatmap(V,  Rowv=NA, Colv=NA,main="V",scale="none")
+heatmap(fit,  Rowv=NA, Colv=NA,main="fit",scale="none")
+heatmap(V-fit,  Rowv=NA, Colv=NA,main="error",scale="none")
+```
+```{r}
+heatmap(W, Colv=NA, main="W",scale="row")
+heatmap(H, Rowv=NA, main="H",scale="column")
+```
+
+```{r}
+heatmap(H[,1:15], Colv=NA, Rowv=NA, main="H[,1:15]",scale="column")
+
+heatmap(W[apply(W, 1, max) > 20,], Colv=NA, main="W, selected words with highest scores",scale="none")
+```
+
+```{r built in nmf heatmaps} 
+basismap(res) # W
+coefmap(res)  # H
+```
+
+Terms loading high..
+```{r}
+relW <- W/(rep(1,nrow(W))%*%t(col_sums(W)))
+Wtable <- data.frame(topic= c(1:nfactors), t(relW))
+Wtable <- gather(Wtable, term, score, -topic)
+
+text_top_terms <- Wtable %>%
+  group_by(topic) %>%
+  top_n(10, score) %>%
+  ungroup() %>%
+  arrange(topic, -score)
+
+text_top_terms %>%
+  filter(topic <= 6) %>%
+  mutate(term = reorder_within(term, score, topic)) %>%
+  ggplot(aes(term, score, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip()+
+  scale_x_reordered()
+```
+
+```{r find topic weights}
+docScores <- H/(rep(1,nfactors) %*% t(col_sums(H)))
+docScores[,1:10]
+```

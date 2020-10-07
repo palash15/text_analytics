@@ -1,0 +1,363 @@
+---
+title:  "Predictive modeling"
+author: "Dennis Fok/Bas Donkers"
+date:   "March, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the data
+```{r}
+load("C:/Users/Palas/Documents/EUR/Text Analytics/reviews_with_predictor_variables.rData")
+colnames(reviews_df) <- gsub(" ", "_", colnames(reviews_df))  # replace spaces in variable names
+reviews_df <- reviews_df[, -96]     # drop NA column
+
+reviews_df$rating <- as.numeric(reviews_df$rating)            # 0=happy, 1=not happy
+
+N_factors <- 20
+N_emotions <- 10 # includes pos/neg
+N_words_stored <- 50
+N_bigrams_stored <- 11
+```
+
+Get feature names and split sample
+```{r Split sample}
+index <- 8
+factornames  <- colnames(reviews_df)[index:(index+N_factors-1)]
+index <- index + N_factors
+wordnames    <- colnames(reviews_df)[index:(index+N_words_stored-1)]
+index <- index + N_words_stored
+emotionnames <- colnames(reviews_df)[index:(index+N_emotions-1)]
+index <- index + N_emotions
+bigramnames <- colnames(reviews_df)[index:(index+N_bigrams_stored-1)]
+index <- index + N_bigrams_stored
+
+set.seed(1234)    # fix seed to allow for results to be reproducible
+estimation_sample <- sort(sample(1:nrow(reviews_df), size = round(0.7*nrow(reviews_df))))
+test_sample <- (1:nrow(reviews_df))[-estimation_sample]
+```
+
+Prepare some strings for use in models
+```{r }
+allFactors <- paste("(", paste(factornames,collapse=" + "), ")")
+allEmotions <- paste("(", paste(emotionnames,collapse=" + "), ")")
+allWords <- paste("(", paste(wordnames,collapse=" + "), ")")
+allBigrams <- paste("(", paste(bigramnames,collapse=" + "), ")")
+allWordsAndBigrams <- paste("(", paste(c(wordnames, bigramnames),collapse=" + "), ")")
+# show example
+allFactors
+allEmotions
+allWords
+allBigrams
+```
+
+# Basic linear model (without interactions and variable selection)
+```{r Linear Models}
+f <- paste("rating ~ Nr_of_words + ", allFactors, " + ", allEmotions, " + ", allWords , " + ", allBigrams)
+lm.all <- lm(f, data=reviews_df[estimation_sample,] )
+summary(lm.all)
+
+f <- paste("rating ~ Nr_of_words + ", allFactors, " + ", allWords , " + ", allBigrams)
+lm.nodict <- lm(f, data=reviews_df[estimation_sample,] )
+summary(lm.nodict)
+
+f <- paste("rating ~  Nr_of_words + ", allFactors)
+lm.onlyfactors <- lm(f, data = reviews_df[estimation_sample, ])
+summary(lm.onlyfactors)
+
+f <- paste("rating ~  Nr_of_words + ", allEmotions)
+lm.onlyemotions <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.onlyemotions)
+ 
+f <- paste("rating ~ Nr_of_words + ", allWords)
+lm.onlywords <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.onlywords)
+
+f <- paste("rating ~ Nr_of_words + ", allBigrams)
+lm.bigrams <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.bigrams)
+
+f <- paste("rating ~ Nr_of_words + ", allWords , " + ",allBigrams)
+lm.words_bigrams <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.words_bigrams)
+
+f <- paste("rating ~ Nr_of_words + positive + negative")
+lm.posneg <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.posneg)
+```
+```{r AIC comparison}
+AIC(lm.all, lm.nodict, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.bigrams, lm.words_bigrams, lm.posneg)
+```
+Best model is lowest AIC is model with all!
+
+
+```{r test nested}
+anova(lm.nodict, lm.all)
+anova(lm.posneg, lm.onlyemotions)
+anova(lm.words_bigrams, lm.all)
+```
+
+```{r Plot prediction histograms}
+library(ggplot2)
+dat <- data.frame(Prediction=predict(lm.all), rating=reviews_df[estimation_sample, "rating"])
+ggplot(dat, aes(x=Prediction))  + 
+    geom_histogram(data=subset(dat,rating == 0),fill = "red", alpha = 0.2) +
+    geom_histogram(data=subset(dat,rating == 1),fill = "blue", alpha = 0.2)
+```
+Compare to logit model (GLM)
+```{r glm}
+f <- paste("(rating==1) ~ Nr_of_words + ", allFactors, " + ", allEmotions, " + ", allWords , " + ", allBigrams)
+glm.all <- glm(f, data=reviews_df[estimation_sample,] , family=binomial)
+summary(glm.all)
+```
+
+
+Plot GLM fit
+```{r glm fit}
+hist(predict(glm.all, type="response"))
+dat <- data.frame(Predicted_prob=predict(glm.all, type="response"), rating=reviews_df[estimation_sample, "rating"])
+ggplot(dat, aes(x=Predicted_prob))  + 
+    geom_histogram(data=subset(dat,rating == 0),fill = "red", alpha = 0.2) +
+    geom_histogram(data=subset(dat,rating == 1),fill = "blue", alpha = 0.2)
+
+```
+
+
+Compare fit: hitrate
+```{r}
+library(caret)
+predglm <- as.factor(predict(glm.all, type="response") > .5)
+predlm  <- as.factor(predict(lm.all, type="response") > .5)
+
+confusionMatrix(data = predlm,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]==1))
+
+confusionMatrix(data = predglm,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]==1))
+```
+```{r all word interactions}
+f <- paste("rating ~  ", allWords,"^2 +", allBigrams)
+lm.interactionswords <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.interactionswords)
+```
+
+```{r interactions vs. bigrams}
+AIC(lm.words_bigrams, lm.interactionswords)
+anova(lm.interactionswords, lm.words_bigrams)
+```
+
+```{r Variable importance}
+# on t-values
+vi <- varImp(lm.all)
+vi$Variable <- rownames(vi)
+vi <- vi[order(-vi$Overall),]
+vi$Variable <- factor(vi$Variable, levels = rev(vi$Variable))
+
+ggplot(vi[1:25, ], aes(Variable,Overall)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (t-value based)")
+
+ggplot(vi[(nrow(vi)-24):nrow(vi), ], aes(Variable,Overall)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (t-value based)")
+```
+
+```{r}
+# on standardized coefficients
+library("matrixStats")
+vi <- coef(lm.all)/sqrt(colVars(model.matrix(formula(lm.all), data=reviews_df[estimation_sample,])))
+StdCoef <- data.frame(StdCoef=vi[2:length(vi)])
+StdCoef$Variable <- rownames(StdCoef)
+StdCoef <- StdCoef[order(- StdCoef$StdCoef),]
+StdCoef$Variable <- factor( StdCoef$Variable, levels = rev( StdCoef$Variable))
+
+StdCoef <-  StdCoef[1:25,]
+ggplot( StdCoef, aes(Variable,StdCoef)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (standardized coefficients)")
+```
+```{r}
+# on coef/ (max-min)
+library("matrixStats")
+X <- model.matrix(formula(lm.all), data=reviews_df[estimation_sample,])
+vi <- coef(lm.all)/( apply(X, 2, max) - apply(X, 2, min) )
+StdCoef <- data.frame(StdCoef=vi[2:length(vi)])
+StdCoef$Variable <- rownames(StdCoef)
+StdCoef <- StdCoef[order(- StdCoef$StdCoef),]
+StdCoef$Variable <- factor( StdCoef$Variable, levels = rev( StdCoef$Variable))
+
+StdCoef <-  StdCoef[1:25,]
+ggplot( StdCoef, aes(Variable,StdCoef)) + geom_bar(stat = "identity") + coord_flip() + ylab("Variable importance (coefficients/range)")
+```
+
+Forward/backward selection is slow... do not do on large model
+```{r}
+f <- paste("rating ~  Nr_of_words + ", allFactors, " + ", allEmotions)
+lm.fe_step <- step(lm(f, data = reviews_df[estimation_sample,]), direction = "both")
+summary(lm.fe_step)
+```
+
+# Lasso regression
+```{r Lasso}
+library(glmnet)
+library(plotmo) # for plot_glmnet
+```
+```{r}
+f = paste("~ 0 + Nr_of_words + ", allFactors, " * ", allEmotions, " + ", allWords, " + ", allBigrams)
+
+# Collect explanatory variables in a (large) matrix
+LargeX <- model.matrix(formula(f), data=reviews_df)
+y <- as.matrix(reviews_df[estimation_sample, "rating"])
+
+lasso.mod <- glmnet(LargeX[estimation_sample,], y, alpha = 1)
+
+plot_glmnet(lasso.mod) 
+plot(lasso.mod)
+
+cvfit <- cv.glmnet(LargeX[estimation_sample,], y, alpha = 1)
+plot(cvfit)
+
+coef(lasso.mod, cvfit$lambda.1se)
+
+par <- predict(lasso.mod, s = cvfit$lambda.min, type='coefficients')
+nnzero(par)
+par <- predict(lasso.mod, s = cvfit$lambda.1se, type='coefficients')
+nnzero(par)
+
+lasso.pred <- predict(lasso.mod, s = cvfit$lambda.1se, newx = LargeX[estimation_sample,])
+lasso.pred.test <- predict(lasso.mod, s = cvfit$lambda.1se, newx = LargeX[test_sample,])
+mean((reviews_df[test_sample, "rating"]-lasso.pred.test)^2)
+```
+
+# Lasso logit = much slower...
+```{r}
+f = paste("~ 0 + Nr_of_words + ", allFactors, " * ", allEmotions, " + ", allWords, " + ", allBigrams)
+LargeX <- model.matrix(formula(f), data=reviews_df)
+
+y <- as.factor(reviews_df[estimation_sample, "rating"])
+lasso.glm <- glmnet(LargeX[estimation_sample,], y, family="binomial", alpha = 1)
+
+plot_glmnet(lasso.glm, nresponse = 5) 
+plot(lasso.glm)
+
+cvfit.glm <- cv.glmnet(LargeX[estimation_sample,], (y), family="binomial", alpha = 1)
+plot(cvfit.glm)
+
+coef(lasso.glm, cvfit.glm$lambda.1se)
+
+par <- predict(lasso.glm, s = cvfit.glm$lambda.min, type='coefficients')
+nnzero(par)
+length(par)
+
+lasso.glm.pred <- predict(lasso.glm, s = cvfit.glm$lambda.1se, type="response", newx = LargeX[estimation_sample,])
+lasso.glm.pred.test <- predict(lasso.glm, s = cvfit.glm$lambda.1se,type="response", newx = LargeX[test_sample,])
+```
+
+```{r Linear with Interactions}
+f <- paste("rating ~  Nr_of_words + ", allFactors,"+", allEmotions,"+", allWordsAndBigrams, " + ", allFactors, " *", allEmotions, " + ", allFactors , "* ", allWordsAndBigrams, " + ", allEmotions , " * ", allWordsAndBigrams)
+lm.interactions <- lm(f, data = reviews_df[estimation_sample,])
+summary(lm.interactions)
+```
+
+
+```{r}
+AIC(lm.all, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.interactions, lm.fe_step)
+```
+
+Predictive performance
+```{r}
+for (m in list(lm.all, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.interactions, lm.fe_step))
+{
+  predicted <- predict.lm(m, reviews_df[estimation_sample,])
+  mse <- mean((as.numeric(reviews_df[estimation_sample,"rating"])-predicted)^2)
+  
+  predicted_test <- predict.lm(m, reviews_df[test_sample,])
+  mse_test<- mean((as.numeric(reviews_df[test_sample,"rating"])-predicted_test)^2)
+  print(c(sqrt(mse), sqrt(mse_test)))
+}
+print("lm.all, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.interactions, lm.fe_step")
+```
+
+# Random forest
+```{r}
+library("randomForest")
+```
+```{r}
+f = paste("as.factor(rating) ~ Nr_of_words + ", allFactors, " * ", allEmotions, " + ", allWords, " + ", allBigrams)
+rf = randomForest(formula(f),  
+                   ntree = 100,
+                   data = reviews_df[estimation_sample,])
+plot(rf)
+print(rf)
+```
+
+```{r}
+varImpPlot(rf,  
+           sort = T,
+           n.var = 20,
+           main = "Top 20 - Variable Importance")
+```
+
+```{r}
+library(caret)
+pred.alt <- predict(rf)
+print("estimation_oob")
+confusionMatrix(data = pred.alt,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]))
+
+
+pred.est <- predict(rf, reviews_df[estimation_sample,])
+print("estimation_insample")
+confusionMatrix(data = pred.est,  
+                reference = as.factor(reviews_df[estimation_sample,"rating"]))
+
+pred.test <- predict(rf, reviews_df[test_sample,])
+print("validation")
+confusionMatrix(data = pred.test,  
+                reference = as.factor(reviews_df[test_sample,"rating"]))
+```
+
+```{r forecast comparison}
+for (m in list(lm.all, lm.nodict, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.bigrams, lm.words_bigrams, lm.posneg, lm.interactions, lm.fe_step, lm.interactionswords))
+{
+  predicted <- 1+(predict.lm(m, reviews_df[estimation_sample,]) >= 0.5)
+  predicted_test <- 1+ (predict.lm(m, reviews_df[test_sample,]) >= 0.5)
+  hit <- mean(predicted == reviews_df[estimation_sample,"rating"])
+  hit.test <- mean(predicted_test == reviews_df[test_sample,"rating"])
+  print(c(hit,hit.test))
+}
+print("lm.all, lm.nodict, lm.onlyfactors, lm.onlyemotions, lm.onlywords, lm.bigrams, lm.words_bigrams, lm.posneg, lm.interactions, lm.fe_step, lm.interactionswords")
+
+print("GLM")
+pred.glm <- predict(glm.all, type="response") >= 0.5
+pred.glm.test <- predict(glm.all, type="response", newdata=reviews_df[test_sample,]) >= 0.5
+print("estimation_insample")
+mean(pred.glm == (reviews_df[estimation_sample,"rating"]==1))
+print("test")
+mean(pred.glm.test == (reviews_df[test_sample,"rating"]==1))
+
+print("Lasso LM")
+pred <- 1+(lasso.pred >= 0.5)
+hit <- mean(pred == reviews_df[estimation_sample,"rating"])
+pred_test <- 1+(lasso.pred.test >= 0.5)
+hit.test <- mean(pred_test == reviews_df[test_sample,"rating"])
+print(c(hit,hit.test))
+
+print("Lasso GLM")
+hit <- mean((lasso.glm.pred>=0.5) == (reviews_df[estimation_sample,"rating"]==1))
+hit.test <- mean((lasso.glm.pred.test>=0.5) == (reviews_df[test_sample,"rating"]==1))
+print(c(hit,hit.test))
+
+
+print("RF")
+pred.alt <- predict(rf)
+print("estimation_oob")
+mean(pred.alt == as.factor(reviews_df[estimation_sample,"rating"]))
+
+
+pred.est <- predict(rf, reviews_df[estimation_sample,])
+print("estimation_insample")
+mean(pred.est == as.factor(reviews_df[estimation_sample,"rating"]))
+
+pred.test <- predict(rf, reviews_df[test_sample,])
+print("test")
+mean(pred.test == as.factor(reviews_df[test_sample,"rating"]))
+```
+# END
